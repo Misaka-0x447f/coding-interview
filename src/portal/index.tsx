@@ -26,8 +26,9 @@ function Portal() {
             data: []
         },
         yAxis: {
-            scale: true
-        },  // auto
+            scale: true,
+            position: 'right',
+        },
         series: [{
             type: 'candlestick',
             data: [],
@@ -43,10 +44,20 @@ function Portal() {
         },
         grid: {
             x: 0,
-            y: 0,
-            x2: 0,
-            y2: 0
-        }
+            y: 30,
+            x2: 80,
+            y2: 30
+        },
+        axisPointer: {
+            link: [
+                {
+                    xAxisIndex: 'all'
+                }
+            ],
+            label: {
+                backgroundColor: '#777'
+            }
+        },
     })
     const xAxisRaw = useRef<number[]>([])
     const dataRaw = useRef<DataPoint[]>([])
@@ -121,9 +132,10 @@ function Portal() {
     }
 
     return <Root>
-        <span>备注：即使使用官方示例也无法使 k 线图中的某一项目高亮，怀疑是有 bug，等待调查。官方示例：https://echarts.apache.org/zh/option.html#series-candlestick.emphasis.itemStyle</span>
+        <span>备注：即使使用官方示例也无法使 k 线图中的某一项目高亮，怀疑是有 bug，或者有配置项目没配对，等待调查。官方示例：https://echarts.apache.org/zh/option.html#series-candlestick.emphasis.itemStyle</span>
         <div>
-            <Button type="primary" loading={!!loading} disabled={!!loading} onClick={toggle}>{connected ? 'Disconnect' : 'Connect'}</Button>
+            <Button type={connected ? undefined : "primary"} size={'large'} danger={connected} loading={!!loading}
+                    disabled={!!loading} onClick={toggle}>{connected ? '脱机' : '联机'}</Button>
         </div>
         <div className={'container'}>
             <div className={'chart-container'}>
@@ -135,7 +147,7 @@ function Portal() {
                 />
             </div>
             <div className={'list-container'}>
-                <PriceList data={dataRaw.current} onHighlight={onHighlight}/>
+                <PriceList data={dataRaw.current.concat().reverse()} onHighlight={onHighlight}/>
             </div>
         </div>
     </Root>
@@ -145,10 +157,12 @@ const Root = styled.div`
   .container {
     display: flex;
     margin-top: 16px;
+
     .chart-container {
       flex: 1;
       margin-right: 16px;
     }
+
     .list-container {
       width: 30vw;
       min-width: 350px;

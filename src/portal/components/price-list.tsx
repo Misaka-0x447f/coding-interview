@@ -56,7 +56,7 @@ const Line = React.memo((props: {
 }) => {
     return <LineRoot>
         <span>{formatDateTime(props.unixTime)}</span>
-        <span>{props.value}</span>
+        <span>{props.value.toFixed(1)}</span>
         <span className={'link'} onMouseOver={props.onHighlight}>Highlight</span>
     </LineRoot>
 }, (prevProps, nextProps) =>

@@ -1,13 +1,16 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Portal from './portal';
+import {ConfigProvider} from "antd";
 
 function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Portal />} />
-      </Routes>
-    </BrowserRouter>
+      <ConfigProvider autoInsertSpaceInButton={false}>
+          <BrowserRouter>
+              <Routes>
+                  <Route path="/" element={<Portal />} />
+              </Routes>
+          </BrowserRouter>
+      </ConfigProvider>
   );
 }
 
