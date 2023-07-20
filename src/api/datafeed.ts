@@ -5,7 +5,7 @@ export type DataPoint = Record<'time' | 'open' | 'high' | 'low' | 'close' | 'vol
 
 export type DatafeedWSInstance = ReturnType<typeof createWebsocketConnection<DataPoint>>
 
-export let datafeed: null | DatafeedWSInstance = null
+let datafeed: null | DatafeedWSInstance = null
 
 export const connectIfNot = () => {
     if (!isNull(datafeed) && !datafeed.isClosed) return
@@ -14,12 +14,9 @@ export const connectIfNot = () => {
     } else {
         datafeed.reopen()
     }
-    return new Promise<typeof datafeed>((resolve, reject) => {
-        datafeed.events.opened.once(() => {
-            resolve(datafeed)
-            datafeed.send({"exchange": "binance", "market": "future", "symbol": "BTC/USDT", "resolution": "1m"})
-        })
-        datafeed.events.closed.once(reject)
+    datafeed.events.opened.once(() => {
+        datafeed.send({"exchange": "binance", "market": "future", "symbol": "BTC/USDT", "resolution": "1m"})
     })
+    return datafeed
 }
 

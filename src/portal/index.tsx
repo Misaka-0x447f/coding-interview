@@ -3,10 +3,11 @@ import {useBeforeMount, useMixedState} from "../utils/hook";
 import {connectIfNot, DatafeedWSInstance, DataPoint} from "../api/datafeed";
 import {useRef, useState} from "react";
 import {EChartsOption} from "echarts-for-react/src/types";
-import {last, cloneDeep, isNull} from 'lodash-es';
+import {last, cloneDeep, isNull, isNumber} from 'lodash-es';
 import {PriceList} from "./components/price-list";
 import {styled} from "styled-components";
 import {Button} from "antd";
+import {RetryStatus} from "../api/interface/websocket";
 
 const dataLimit = 10000
 const formatTime = (unixTimestamp: number) => {
@@ -20,7 +21,8 @@ function Portal() {
     const datafeed = useRef<null | DatafeedWSInstance>()
     const echartRef = useRef<null | Chart>(null)
     const [connected, setConnected] = useState(false)
-    const [loading, setLoading] = useState(0)
+    const [loading, setLoading] = useState(false)
+    const [reconnectStatus, setReconnectStatus] = useState(undefined as RetryStatus | undefined | number)
     const [option, setOption, optionRef] = useMixedState<EChartsOption>({
         xAxis: {
             data: []
@@ -63,32 +65,45 @@ function Portal() {
     const dataRaw = useRef<DataPoint[]>([])
 
     useBeforeMount(() => {
-        setLoading(val => val + 1)
-        connectIfNot().finally(() => {
-            setLoading(val => val - 1)
-        }).then((instance) => {
-            datafeed.current = instance
-            instance.events.message.sub((msg) => {
-                setConnected(true)
-                const current = cloneDeep(optionRef.current)
-                if (current.xAxis.data.length && current.xAxis.data.length >= dataLimit) {
-                    current.xAxis.data.shift()
-                    current.series[0].data.shift()
-                    xAxisRaw.current.shift()
-                    dataRaw.current.shift()
-                }
-                const data = [msg.open, msg.high, msg.low, msg.close]
-                if (!xAxisRaw.current.length || msg.time !== last(xAxisRaw.current)) {
-                    xAxisRaw.current.push(msg.time)
-                    current.xAxis.data.push(formatTime(msg.time))
-                    current.series[0].data.push(data)
-                    dataRaw.current.push(msg)
+        datafeed.current = connectIfNot()
+        datafeed.current.events.retry.sub(({retryStatus, countdownMilliseconds}) => {
+            setLoading(true)
+            setReconnectStatus(_ => {
+                if (retryStatus === 'sleep') {
+                    return countdownMilliseconds
                 } else {
-                    current.series[0].data[current.series[0].data.length - 1] = data
-                    dataRaw.current[dataRaw.current.length - 1] = msg
+                    return retryStatus
                 }
-                setOption(current)
             })
+        })
+        setLoading(true)
+        datafeed.current.events.opening.sub(() => {
+            setLoading(true)
+        })
+        datafeed.current.events.closed.sub(() => {
+            setConnected(false)
+        })
+        datafeed.current.events.message.sub((msg) => {
+            setConnected(true)
+            setLoading(false)
+            const current = cloneDeep(optionRef.current)
+            if (current.xAxis.data.length && current.xAxis.data.length >= dataLimit) {
+                current.xAxis.data.shift()
+                current.series[0].data.shift()
+                xAxisRaw.current.shift()
+                dataRaw.current.shift()
+            }
+            const data = [msg.open, msg.high, msg.low, msg.close]
+            if (!xAxisRaw.current.length || msg.time !== last(xAxisRaw.current)) {
+                xAxisRaw.current.push(msg.time)
+                current.xAxis.data.push(formatTime(msg.time))
+                current.series[0].data.push(data)
+                dataRaw.current.push(msg)
+            } else {
+                current.series[0].data[current.series[0].data.length - 1] = data
+                dataRaw.current[dataRaw.current.length - 1] = msg
+            }
+            setOption(current)
         })
     })
 
@@ -123,19 +138,26 @@ function Portal() {
             datafeed.current.close()
             setConnected(false)
         } else {
-            setLoading(val => val + 1)
-            await connectIfNot().finally(() => {
-                setLoading(val => val - 1)
-            })
+            connectIfNot()
             setConnected(true)
         }
     }
 
     return <Root>
         <span>备注：即使使用官方示例也无法使 k 线图中的某一项目高亮，怀疑是有 bug，或者有配置项目没配对，等待调查。官方示例：https://echarts.apache.org/zh/option.html#series-candlestick.emphasis.itemStyle</span>
-        <div>
+        <div className={'status-bar'}>
             <Button type={connected ? undefined : "primary"} size={'large'} danger={connected} loading={!!loading}
                     disabled={!!loading} onClick={toggle}>{connected ? '脱机' : '联机'}</Button>
+            <div className={'status'}>
+                {(() => {
+                    if (!reconnectStatus || reconnectStatus === 'connected') return <span>要模拟连接中断，对于 chromium，请使用开发者工具。对于 firefox，请使用扩展。</span>
+                    if (isNumber(reconnectStatus)) return <div>
+                        <span>连接中断。将于 {Math.floor(reconnectStatus as unknown as number / 1000)} 秒后重试连接。</span>
+                        <Button type="link" onClick={() => datafeed.current.reopen()} size={'small'}>现在重试</Button>
+                    </div>
+                    return <span>自动重试...</span>
+                })()}
+            </div>
         </div>
         <div className={'container'}>
             <div className={'chart-container'}>
@@ -154,6 +176,16 @@ function Portal() {
 }
 
 const Root = styled.div`
+  .status-bar {
+    margin: 8px 0;
+    display: flex;
+    align-items: center;
+
+    .status {
+      margin-left: 8px;
+    }
+  }
+
   .container {
     display: flex;
     margin-top: 16px;

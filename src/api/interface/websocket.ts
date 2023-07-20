@@ -1,6 +1,8 @@
 import {losslessStringify, sleep, tryWithCustomHandler} from "../../utils/lang";
 import {createTypedEvent} from "../../utils/typedEvent";
 
+export type RetryStatus = 'sleep' | 'connected' | 'connecting' | 'enabled' | 'disabled'
+
 export const createWebsocketConnection = <T>(url: string | URL, {
     protocols = undefined as string | string[] | undefined,
     autoRetry = true
@@ -8,6 +10,8 @@ export const createWebsocketConnection = <T>(url: string | URL, {
     let WebSocketInstance = new WebSocket(url, protocols)
     let autoRetryInternal = autoRetry
     let retryCount = 0
+    let sleeping = 0
+    const retryNowEvent = createTypedEvent<void>()
     const events = {
         opening: createTypedEvent<void>(),
         opened: createTypedEvent<Event>(),
@@ -15,10 +19,22 @@ export const createWebsocketConnection = <T>(url: string | URL, {
         message: createTypedEvent<T>(),
         crash: createTypedEvent<Event>(),
         retry: createTypedEvent<{
-            delayMilliseconds: number
+            retryStatus: RetryStatus
+            countdownMilliseconds?: number
         }>()
     }
-    const addEventListener = (socket: WebSocket) => {
+    const addEventListener = (socket: WebSocket, isAuto = false) => {
+        const openListener = (event) => {
+            events.opened.dispatch(event)
+            isAuto && events.retry.dispatch({retryStatus: 'connected'})
+        }
+        const closeListener = (event) => {
+            if (event.code === 1000) {
+                events.closed.dispatch(event)
+            } else {
+                events.crash.dispatch(event)
+            }
+        }
         const messageListener = (event) => events.message.dispatch(
             tryWithCustomHandler(
                 () => JSON.parse(event.data),
@@ -29,35 +45,53 @@ export const createWebsocketConnection = <T>(url: string | URL, {
                 }
             ) as T
         )
-        socket.addEventListener('open', events.opened.dispatch)
-        socket.addEventListener('close', events.closed.dispatch)
+        socket.addEventListener('open', openListener)
+        socket.addEventListener('close', closeListener)
         socket.addEventListener('message', messageListener)
         socket.addEventListener('error', events.crash.dispatch)
+        events.opening.dispatch()
         return () => {
-            socket.removeEventListener('open', events.opened.dispatch)
-            socket.removeEventListener('close', events.closed.dispatch)
+            socket.removeEventListener('open', openListener)
+            socket.removeEventListener('close', closeListener)
             socket.removeEventListener('message', messageListener)
             socket.removeEventListener('error', events.crash.dispatch)
         }
     }
     let removeEventListener = addEventListener(WebSocketInstance)
-    events.opening.dispatch()
     events.opened.sub(() => {
         retryCount = 0
     })
-    const reconnect = () => {
+    const reconnect = (isAuto = false) => {
+        if (!isAuto) retryNowEvent.dispatch()
+        events.opening.dispatch()
         WebSocketInstance = new WebSocket(url, protocols)
         removeEventListener()
-        removeEventListener = addEventListener(WebSocketInstance)
-        events.opening.dispatch()
+        removeEventListener = addEventListener(WebSocketInstance, isAuto)
     }
+    // TODO: Not all browser follow the specification. Consider add heartbeat.
     events.crash.sub(async () => {
-        if (autoRetryInternal) {
+        if (autoRetryInternal && sleeping === 0) {
+            retryCount++
+            sleeping++
             await sleep()
-            const delayMilliseconds = Math.min(1000 * 2 ** retryCount, 1000 * 60)
-            events.retry.dispatch({delayMilliseconds})
-            await sleep(delayMilliseconds)
-            reconnect()
+            let delayUntil = new Date().getTime() + Math.min(1000 * 2 ** retryCount - 10, 1000 * 60 - 10)
+            const getRestCountdown = () => delayUntil - new Date().getTime()
+            const unsub = retryNowEvent.sub(() => {
+                delayUntil = new Date().getTime()
+            })
+            events.retry.dispatch({retryStatus: 'sleep', countdownMilliseconds: getRestCountdown()})
+            const interval = setInterval(() => {
+                const rest = getRestCountdown()
+                if (rest <= 0) {
+                    clearInterval(interval)
+                    unsub()
+                    events.retry.dispatch({retryStatus: 'connecting'})
+                    reconnect(true)
+                    sleeping--
+                    return
+                }
+                events.retry.dispatch({retryStatus: 'sleep', countdownMilliseconds: rest})
+            }, 100)
         }
     })
     return {
@@ -80,6 +114,7 @@ export const createWebsocketConnection = <T>(url: string | URL, {
         },
         setAutoRetry(enable: boolean) {
             autoRetryInternal = enable
+            events.retry.dispatch({retryStatus: enable ? 'enabled' : 'disabled'})
         }
     }
 }
